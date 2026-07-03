@@ -1,0 +1,11 @@
+# Downloaded model weights (~87 MB); run scripts/download_model.*
+/examples/model/model.safetensors
+
+# LanceDB data directories created by examples
+/examples/data/
+
+# Per-repo coordination locks
+**/.rek0n-*.lock
+
+# Rust build artifacts
+/target/
