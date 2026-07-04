@@ -11,9 +11,11 @@ use crate::index_config::{to_lancedb_index, VectorIndexConfig};
 use crate::lock::{acquire_exclusive, acquire_shared, lock_path, LockOptions};
 use crate::model::LocalEmbedder;
 use crate::types::{
-    validate_embed_batch_size, validate_file_path, validate_search_limit, validate_table_name,
-    EmbedError, SearchResult, SemanticChunk, DEFAULT_EMBED_BATCH_SIZE, EMBEDDING_DIM,
+    validate_embed_batch_size, validate_file_path, validate_index_batch, validate_search_limit,
+    validate_table_name, EmbedError, SearchResult, SemanticChunk, DEFAULT_EMBED_BATCH_SIZE,
+    EMBEDDING_DIM,
 };
+use lancedb::table::{OptimizeAction, OptimizeOptions};
 use lancedb::DistanceType;
 
 const MIN_ROWS_FOR_VECTOR_INDEX: usize = 256;
@@ -115,7 +117,8 @@ impl VectorStorage {
 
         let result = table.delete(&file_path_predicate(file_path)).await?;
         if result.num_deleted_rows > 0 {
-            rebuild_vector_index(&table, &self.vector_index_config).await?;
+            refresh_vector_index(&table, &self.vector_index_config, IndexRefreshMode::Retrain)
+                .await?;
         }
         debug!(
             deleted = result.num_deleted_rows,
@@ -246,11 +249,9 @@ impl VectorStorage {
         let _lock =
             acquire_shared(lock_path(&self.db_dir, &self.repo_name), self.lock_options).await?;
 
-        let table = self
-            .connection
-            .open_table(self.repo_name.clone())
-            .execute()
-            .await?;
+        let Some(table) = self.try_open_table().await? else {
+            return Ok(Vec::new());
+        };
 
         let distance: DistanceType = self.vector_index_config.search_distance().into();
         let stream = table
@@ -276,7 +277,7 @@ impl VectorStorage {
         let _lock =
             acquire_exclusive(lock_path(&self.db_dir, &self.repo_name), self.lock_options).await?;
         let table = self.open_or_create_table(batch).await?;
-        create_vector_index_if_needed(&table, &self.vector_index_config).await
+        refresh_vector_index(&table, &self.vector_index_config, IndexRefreshMode::Append).await
     }
 
     async fn replace_file_batch(
@@ -292,7 +293,7 @@ impl VectorStorage {
         }
 
         let table = self.open_or_create_table(batch).await?;
-        rebuild_vector_index(&table, &self.vector_index_config).await
+        refresh_vector_index(&table, &self.vector_index_config, IndexRefreshMode::Retrain).await
     }
 
     async fn open_or_create_table(&self, batch: RecordBatch) -> Result<lancedb::Table, EmbedError> {
@@ -344,6 +345,45 @@ impl VectorStorage {
     }
 }
 
+enum IndexRefreshMode {
+    Append,
+    Retrain,
+}
+
+async fn refresh_vector_index(
+    table: &lancedb::Table,
+    vector_index_config: &VectorIndexConfig,
+    mode: IndexRefreshMode,
+) -> Result<(), EmbedError> {
+    let row_count = table.count_rows(None).await?;
+    let has_index = vector_index_exists(table).await?;
+
+    if row_count < MIN_ROWS_FOR_VECTOR_INDEX {
+        if has_index {
+            drop_vector_indices(table).await?;
+        }
+        return Ok(());
+    }
+
+    if !has_index {
+        return create_vector_index_if_needed(table, vector_index_config).await;
+    }
+
+    let options = match mode {
+        IndexRefreshMode::Append => OptimizeOptions::merge(0),
+        IndexRefreshMode::Retrain => OptimizeOptions::retrain(),
+    };
+
+    match table.optimize(OptimizeAction::Index(options)).await {
+        Ok(_) => Ok(()),
+        Err(error) if is_skippable_index_error(&error) => {
+            warn!(error = %error, "skipped vector index refresh");
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 async fn create_vector_index_if_needed(
     table: &lancedb::Table,
     vector_index_config: &VectorIndexConfig,
@@ -374,14 +414,6 @@ async fn create_vector_index_if_needed(
         }
         Err(error) => Err(error.into()),
     }
-}
-
-async fn rebuild_vector_index(
-    table: &lancedb::Table,
-    vector_index_config: &VectorIndexConfig,
-) -> Result<(), EmbedError> {
-    drop_vector_indices(table).await?;
-    create_vector_index_if_needed(table, vector_index_config).await
 }
 
 async fn drop_vector_indices(table: &lancedb::Table) -> Result<(), EmbedError> {
@@ -545,6 +577,7 @@ fn assemble_record_batch(
 }
 
 fn validate_index_input(chunks: &[SemanticChunk], batch_size: usize) -> Result<(), EmbedError> {
+    validate_index_batch(chunks)?;
     validate_embed_batch_size(batch_size)?;
     for chunk in chunks {
         chunk.validate()?;

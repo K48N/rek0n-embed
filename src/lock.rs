@@ -8,6 +8,7 @@ use fs4::fs_std::FileExt;
 use crate::types::EmbedError;
 
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
+pub const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LockOptions {
@@ -34,7 +35,7 @@ impl LockOptions {
 
 impl Default for LockOptions {
     fn default() -> Self {
-        Self::blocking()
+        Self::with_timeout(DEFAULT_LOCK_TIMEOUT)
     }
 }
 

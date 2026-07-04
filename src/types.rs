@@ -1,78 +1,16 @@
-use serde::{Deserialize, Serialize};
+use rek0n_chunk::{
+    validate_file_path as chunk_validate_file_path,
+    validate_input_text_length as chunk_validate_input_text_length, ChunkError, ChunkKind,
+    IndexedChunk, MAX_FILE_PATH_LEN, MAX_INPUT_TEXT_LEN,
+};
 
-pub const MAX_INPUT_TEXT_LEN: usize = 262_144;
+pub use rek0n_chunk::ChunkKind;
+pub use MAX_FILE_PATH_LEN;
+pub use MAX_INPUT_TEXT_LEN;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ChunkKind {
-    Function,
-    Struct,
-    Impl,
-    Unknown,
-}
+pub const MAX_QUERY_TEXT_LEN: usize = 8_192;
 
-impl ChunkKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ChunkKind::Function => "Function",
-            ChunkKind::Struct => "Struct",
-            ChunkKind::Impl => "Impl",
-            ChunkKind::Unknown => "Unknown",
-        }
-    }
-}
-
-impl std::str::FromStr for ChunkKind {
-    type Err = std::convert::Infallible;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Ok(match value {
-            "Function" => ChunkKind::Function,
-            "Struct" => ChunkKind::Struct,
-            "Impl" => ChunkKind::Impl,
-            _ => ChunkKind::Unknown,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct SemanticChunk {
-    pub kind: ChunkKind,
-    pub name: Option<String>,
-    pub text: String,
-    pub start_line: usize,
-    pub end_line: usize,
-    pub file_path: String,
-}
-
-impl SemanticChunk {
-    pub fn line_range(&self) -> String {
-        format!("{}:{}", self.start_line, self.end_line)
-    }
-
-    pub fn validate(&self) -> Result<(), EmbedError> {
-        if self.text.trim().is_empty() {
-            return Err(EmbedError::InvalidChunk(
-                "text must not be empty".to_owned(),
-            ));
-        }
-
-        if self.file_path.trim().is_empty() {
-            return Err(EmbedError::InvalidChunk(
-                "file_path must not be empty".to_owned(),
-            ));
-        }
-
-        if self.end_line < self.start_line {
-            return Err(EmbedError::InvalidChunk(format!(
-                "end_line ({}) must be >= start_line ({})",
-                self.end_line, self.start_line
-            )));
-        }
-
-        validate_input_text_length(&self.text)?;
-        Ok(())
-    }
-}
+pub type SemanticChunk = IndexedChunk;
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -83,6 +21,9 @@ pub struct SearchResult {
 pub const EMBEDDING_DIM: i32 = 384;
 
 pub const DEFAULT_EMBED_BATCH_SIZE: usize = 32;
+pub const MAX_EMBED_BATCH_SIZE: usize = 256;
+pub const MAX_INDEX_BATCH_CHUNKS: usize = 10_000;
+pub const MAX_SEARCH_LIMIT: usize = 10_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EmbedError {
@@ -144,19 +85,50 @@ impl EmbedError {
     pub fn inference(message: impl Into<String>) -> Self {
         EmbedError::Inference(message.into())
     }
+
+    fn from_chunk_error(error: ChunkError) -> Self {
+        match error {
+            ChunkError::EmptyText => EmbedError::InvalidChunk("text must not be empty".into()),
+            ChunkError::EmptyFilePath => {
+                EmbedError::InvalidChunk("file_path must not be empty".into())
+            }
+            ChunkError::InputTooLong { len, max } => EmbedError::Tokenizer(format!(
+                "input length {len} exceeds limit of {max} characters"
+            )),
+            ChunkError::FilePathTooLong { len, max } => EmbedError::InvalidMetadata(format!(
+                "file_path length {len} exceeds limit of {max}"
+            )),
+            ChunkError::FilePathControlChars => EmbedError::InvalidMetadata(
+                "file_path must not contain control characters".into(),
+            ),
+            ChunkError::InvertedLineRange {
+                start_line,
+                end_line,
+            } => EmbedError::InvalidChunk(format!(
+                "end_line ({end_line}) must be >= start_line ({start_line})"
+            )),
+            ChunkError::HasSyntaxErrors => EmbedError::InvalidChunk(
+                "parser flagged chunk with syntax errors".into(),
+            ),
+        }
+    }
 }
 
 pub fn validate_input_text_length(text: &str) -> Result<(), EmbedError> {
-    if text.len() > MAX_INPUT_TEXT_LEN {
-        return Err(EmbedError::Tokenizer(format!(
-            "input length {} exceeds limit of {MAX_INPUT_TEXT_LEN} characters",
-            text.len()
-        )));
-    }
-    Ok(())
+    chunk_validate_input_text_length(text).map_err(EmbedError::from_chunk_error)
 }
 
 pub fn validate_search_limit(limit: usize) -> Result<usize, EmbedError> {
+    if limit == 0 {
+        return Err(EmbedError::InvalidMetadata(
+            "search limit must be > 0".to_owned(),
+        ));
+    }
+    if limit > MAX_SEARCH_LIMIT {
+        return Err(EmbedError::InvalidMetadata(format!(
+            "search limit {limit} exceeds maximum of {MAX_SEARCH_LIMIT}"
+        )));
+    }
     u32::try_from(limit).map_err(|_| {
         EmbedError::InvalidMetadata(format!("search limit {limit} exceeds u32::MAX"))
     })?;
@@ -169,16 +141,68 @@ pub fn validate_embed_batch_size(batch_size: usize) -> Result<(), EmbedError> {
             "embed batch size must be > 0".to_owned(),
         ));
     }
+    if batch_size > MAX_EMBED_BATCH_SIZE {
+        return Err(EmbedError::InvalidMetadata(format!(
+            "embed batch size {batch_size} exceeds maximum of {MAX_EMBED_BATCH_SIZE}"
+        )));
+    }
+    Ok(())
+}
+
+pub fn validate_index_batch(chunks: &[SemanticChunk]) -> Result<(), EmbedError> {
+    if chunks.is_empty() {
+        return Err(EmbedError::InvalidMetadata(
+            "index batch must contain at least one chunk".to_owned(),
+        ));
+    }
+    if chunks.len() > MAX_INDEX_BATCH_CHUNKS {
+        return Err(EmbedError::InvalidMetadata(format!(
+            "index batch contains {} chunks, exceeding maximum of {MAX_INDEX_BATCH_CHUNKS}",
+            chunks.len()
+        )));
+    }
+    Ok(())
+}
+
+pub fn validate_query_text(text: &str) -> Result<(), EmbedError> {
+    if text.trim().is_empty() {
+        return Err(EmbedError::InvalidMetadata(
+            "query text must not be empty".to_owned(),
+        ));
+    }
+    if text.len() > MAX_QUERY_TEXT_LEN {
+        return Err(EmbedError::InvalidMetadata(format!(
+            "query text length {} exceeds limit of {MAX_QUERY_TEXT_LEN}",
+            text.len()
+        )));
+    }
     Ok(())
 }
 
 pub fn validate_file_path(file_path: &str) -> Result<(), EmbedError> {
-    if file_path.trim().is_empty() {
-        return Err(EmbedError::InvalidMetadata(
-            "file_path must not be empty".to_owned(),
-        ));
-    }
-    Ok(())
+    chunk_validate_file_path(file_path).map_err(EmbedError::from_chunk_error)
+}
+
+pub fn try_from_parser_chunk(
+    file_path: impl Into<String>,
+    parsed: &rek0n_chunk::ParsedChunk,
+) -> Result<SemanticChunk, EmbedError> {
+    SemanticChunk::from_parsed(file_path, parsed).map_err(EmbedError::from_chunk_error)
+}
+
+pub fn try_from_parser_parts(
+    file_path: impl Into<String>,
+    parser_kind: &str,
+    name: Option<String>,
+    text: impl Into<String>,
+    start_line: usize,
+    end_line: usize,
+    has_error: bool,
+) -> Result<SemanticChunk, EmbedError> {
+    SemanticChunk::try_from_parser_parts(
+        file_path, parser_kind, name, text, start_line, end_line, has_error,
+    )
+    .map_err(EmbedError::from_chunk_error)
 }
 
 pub fn validate_table_name(name: &str) -> Result<(), EmbedError> {
@@ -248,6 +272,30 @@ mod tests {
     }
 
     #[test]
+    fn maps_parser_kind_strings() {
+        assert_eq!(
+            ChunkKind::from_parser_kind("type_alias"),
+            ChunkKind::TypeAlias
+        );
+        assert_eq!(ChunkKind::from_parser_kind("Function"), ChunkKind::Function);
+    }
+
+    #[test]
+    fn from_parser_parts_builds_chunk() {
+        let chunk = SemanticChunk::from_parser_parts(
+            "src/lib.rs",
+            "function",
+            Some("main".into()),
+            "fn main() {}",
+            1,
+            1,
+        );
+        assert_eq!(chunk.kind, ChunkKind::Function);
+        assert_eq!(chunk.file_path, "src/lib.rs");
+        assert!(chunk.validate().is_ok());
+    }
+
+    #[test]
     fn rejects_empty_file_path() {
         assert!(validate_file_path("").is_err());
         assert!(validate_file_path("   ").is_err());
@@ -309,5 +357,41 @@ mod tests {
     #[test]
     fn rejects_zero_embed_batch_size() {
         assert!(validate_embed_batch_size(0).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_index_batch() {
+        let chunks = vec![sample_chunk(); MAX_INDEX_BATCH_CHUNKS + 1];
+        assert!(validate_index_batch(&chunks).is_err());
+    }
+
+    #[test]
+    fn rejects_zero_search_limit() {
+        assert!(validate_search_limit(0).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_query_text() {
+        assert!(validate_query_text("   ").is_err());
+    }
+
+    #[test]
+    fn rejects_control_characters_in_file_path() {
+        assert!(validate_file_path("src/a\nb.rs").is_err());
+    }
+
+    #[test]
+    fn rejects_parser_error_chunks() {
+        let err = try_from_parser_parts(
+            "src/a.rs",
+            "function",
+            Some("broken".into()),
+            "fn broken() {}",
+            1,
+            1,
+            true,
+        )
+        .expect_err("has_error");
+        assert!(matches!(err, EmbedError::InvalidChunk(_)));
     }
 }

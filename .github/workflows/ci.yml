@@ -10,20 +10,39 @@ env:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / rust ${{ matrix.rust }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rust: 1.82.0
+          - os: windows-latest
+            rust: 1.82.0
+          - os: ubuntu-latest
+            rust: stable
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Checkout rek0n-chunk
+        uses: actions/checkout@v4
         with:
+          repository: K48N/rek0n-chunk
+          path: ../rek0n-chunk
+
+      - name: Install Rust ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2
 
       - name: Format
         run: cargo fmt --all -- --check

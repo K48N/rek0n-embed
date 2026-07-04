@@ -1,64 +1,66 @@
 # rek0n-embed
 
-Part of my personal project rek0n. Embeds parser chunks locally and stores them in LanceDB for semantic search.
+Part of [rek0n](https://github.com/K48N/rek0n). Embeds parser chunks locally and stores them in LanceDB for semantic search.
 
-## What it is
+## Overview
 
-A Rust library that takes `SemanticChunk` values from rek0n-parser, runs all-MiniLM-L6-v2 via Candle, and persists 384-d L2-normalized vectors in LanceDB for nearest-neighbor search. No cloud embedding APIs, no hosted vector DB here; just embed, store, and query.
+This crate takes `SemanticChunk` values (indexed chunks from [rek0n-chunk](https://github.com/K48N/rek0n-chunk)), runs all-MiniLM-L6-v2 through Candle on CPU, and writes 384-dimensional L2-normalized vectors into LanceDB. No cloud embedding APIs and no separate vector service.
 
-Most local RAG setups reach for a hosted embedding API, and that is a reasonable choice for a lot of teams. rek0n does not, because sending code off-device is not something I am willing to do for a tool meant to read an entire repository. That decision means CPU inference through Candle, which is slower than a network call. `with_device` exists as an escape hatch for that, though a tuned GPU pipeline is not built yet.
+Local inference is slower than a hosted API. The tradeoff is privacy and control: rek0n is meant to read a whole repository without sending source code off the machine.
 
 ## How it works
 
-1. `LocalEmbedder::new` mmap's `model.safetensors` beside `config.json` and `tokenizer.json`. Tokenize → BERT forward → mean pool (mask-aware) → L2 normalize. Bulk indexing batches texts (default 32) per forward pass.
-2. `VectorStorage::replace_file_chunks` validates chunks, embeds on `spawn_blocking`, then takes an exclusive file lock only for the LanceDB write. Existing rows for that `file_path` are deleted before the new batch is appended.
-3. Vectors land as Arrow `FixedSizeList<Float32, 384>` record batches in a per-repo LanceDB table.
-4. `query_semantic_context` embeds the query off-thread, takes a shared lock, and runs vector search. Results map back to `SemanticChunk` + score.
-5. ANN index creation waits until ≥256 rows and is rebuilt after row deletes. Cross-process writers are serialized via `.rek0n-{repo}.lock` (advisory, one machine).
+1. `LocalEmbedder` loads `model.safetensors`, tokenizes text, runs BERT, mean-pools with the attention mask, and L2-normalizes to 384 floats.
+2. `VectorStorage::replace_file_chunks` embeds on a blocking thread pool, then takes a file lock only for the LanceDB write. Rows for that `file_path` are deleted and replaced.
+3. Vectors are stored as Arrow fixed-size float lists in a per-repo table.
+4. `query_semantic_context` embeds the query off-thread, opens a shared lock, and runs vector search.
+5. ANN indexes are created once a table reaches 256 rows. Appends call LanceDB `optimize` with incremental merge. File replace and delete paths retrain the existing index instead of dropping and rebuilding it from scratch.
 
-## Why it's built this way
+## Design
 
-**Local inference.** RAG over a codebase should not phone home. Candle runs the transformer on CPU with weights I fetch and checksum myself.
+**Embed before lock.** Tokenization and forward passes stay off the async executor. The advisory lock covers LanceDB I/O only.
 
-**Hard embed boundary.** rek0n-parser handles parse. This crate answers one question only: what are the vectors, and which chunks match? No hidden side effects.
+**LanceDB on disk.** Embedded Arrow-native storage without running a separate server. Good fit for a single-machine indexer.
 
-**Mean pool, not CLS.** Matches sentence-transformers pooling. L2-normalized vectors let LanceDB L2 distance map to cosine similarity.
+**Incremental index maintenance.** Full index drops were too expensive on frequent file saves. `OptimizeOptions::merge(0)` handles appends; `OptimizeOptions::retrain()` handles replace and delete churn.
 
-**Embed before lock.** Tokenization and forward passes are CPU-heavy. They stay on the blocking thread pool; the file lock covers only the LanceDB I/O.
-
-**LanceDB on disk.** Embedded, Arrow-native storage without running a separate vector service. Enough for a single-machine indexer.
-
-## Shortcomings
-
-- CPU inference is the bottleneck on large repos; `with_device` exists but there is no tuned GPU pipeline yet.
-- File locks are advisory and local: fine for one indexer per checkout, not a multi-machine coordination layer.
-- ANN index creation waits until ≥256 rows; smaller tables use flat search.
-- Model swap is not plug-and-play: tokenizer and architecture must stay BERT-compatible with Candle.
-- `SemanticChunk` is embed-local (includes `file_path`); keep it aligned with parser output at the call site.
+**Shared chunk types.** rek0n-chunk keeps parser and embed aligned on kinds, limits, and validation rules.
 
 ## Usage
 
 ```rust
 use std::sync::Arc;
-use rek0n_embed::{LocalEmbedder, VectorStorage, query_semantic_context};
+use rek0n_embed::{try_from_parser_chunk, LocalEmbedder, VectorStorage, query_semantic_context};
 
 let embedder = Arc::new(LocalEmbedder::new(
     "model/model.safetensors".as_ref(),
     "model/tokenizer.json".as_ref(),
 )?);
 let storage = VectorStorage::initialize("./lancedb", "my-repo").await?;
-storage
-    .replace_file_chunks("src/lib.rs", &chunks, Arc::clone(&embedder))
-    .await?;
+
+for parsed in parsed_chunks {
+    let chunk = try_from_parser_chunk("src/lib.rs", &parsed)?;
+    // batch and index...
+}
+
 let hits = query_semantic_context(&storage, embedder, "how does auth work?", 10).await?;
 ```
 
-See `examples/semantic_search.rs` for a full embed-and-search walkthrough:
+Example:
 
 ```sh
 ./scripts/download_model.sh
 cargo run --example semantic_search
 ```
+
+Requires `protoc` for LanceDB build scripts. CI installs it automatically.
+
+## Known gaps
+
+- CPU inference dominates latency on large repos. `with_device` exists but there is no tuned GPU pipeline yet.
+- Advisory file locks coordinate one machine, not a fleet of indexers.
+- Model swap is manual: tokenizer and architecture must stay BERT-compatible with Candle.
+- Tables under 256 rows use flat search by design.
 
 ## License
 

@@ -59,6 +59,12 @@ impl LocalEmbedder {
         let config_data = std::fs::read_to_string(&config_path)
             .map_err(|source| EmbedError::io_path(&config_path, source))?;
         let config: Config = serde_json::from_str(&config_data)?;
+        if config.hidden_size != EMBEDDING_DIM as usize {
+            return Err(EmbedError::ModelConfig(format!(
+                "model hidden_size {} does not match expected embedding dim {EMBEDDING_DIM}",
+                config.hidden_size
+            )));
+        }
 
         let mut tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|error| EmbedError::Tokenizer(error.to_string()))?;
