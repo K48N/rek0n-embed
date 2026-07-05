@@ -2,7 +2,7 @@
 name = "rek0n-embed"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.86"
+rust-version = "1.91"
 authors = ["kon"]
 description = "Local embedding and vector search for rek0n RAG indexing"
 readme = "README.md"
