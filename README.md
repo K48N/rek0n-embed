@@ -62,26 +62,6 @@ Example:
 cargo run --example semantic_search
 ```
 
-## Publishing to crates.io
-
-Publish dependencies first, then this crate:
-
-1. [`rek0n-chunk`](https://crates.io/crates/rek0n-chunk) — already on crates.io
-2. [`rek0n-db`](https://github.com/K48N/rek0n-db) — publish before embed
-3. **rek0n-embed** — set `rek0n-chunk = "0.1.0"` and `rek0n-db = "0.1.0"` (no `path =` in `Cargo.toml`)
-
-From this repo root:
-
-```sh
-cargo fmt
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo publish --dry-run
-cargo publish
-```
-
-`cargo login` is one-time. Bump `version` for each release; crates.io does not allow republishing the same version.
-
 ## Known gaps
 
 - CPU inference dominates latency on large repos. `with_device` exists but there is no tuned GPU pipeline yet.
