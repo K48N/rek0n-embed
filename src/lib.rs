@@ -1,4 +1,4 @@
-//! Local embeddings and LanceDB vector search for [rek0n](https://github.com/K48N/rek0n).
+//! Local embeddings and rek0n-db vector search for [rek0n](https://github.com/K48N/rek0n).
 
 mod db;
 mod index_config;
@@ -37,5 +37,5 @@ pub async fn query_semantic_context(
 
 #[doc(hidden)]
 pub mod testing {
-    pub use crate::db::record_batch_from_vectors;
+    pub use crate::db::{record_batch_from_vectors, IndexedBatch};
 }

@@ -1,6 +1,6 @@
-use lancedb::index::vector::IvfPqIndexBuilder;
-use lancedb::index::Index;
-use lancedb::DistanceType;
+use rek0n_db::{AnnStrategy, DEFAULT_IVF_BUCKETS, DEFAULT_IVF_PROBE};
+
+const MIN_ROWS_FOR_IVF: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VectorDistance {
@@ -8,16 +8,6 @@ pub enum VectorDistance {
     L2,
     Cosine,
     Dot,
-}
-
-impl From<VectorDistance> for DistanceType {
-    fn from(value: VectorDistance) -> Self {
-        match value {
-            VectorDistance::L2 => DistanceType::L2,
-            VectorDistance::Cosine => DistanceType::Cosine,
-            VectorDistance::Dot => DistanceType::Dot,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -54,26 +44,34 @@ impl VectorIndexConfig {
             VectorIndexKind::IvfPq(cfg) => cfg.distance,
         }
     }
-}
 
-pub(crate) fn to_lancedb_index(config: &VectorIndexConfig) -> Index {
-    match &config.kind {
-        VectorIndexKind::Auto => Index::Auto,
-        VectorIndexKind::IvfPq(cfg) => {
-            let mut builder = IvfPqIndexBuilder::default().distance_type(cfg.distance.into());
-            if let Some(num_partitions) = cfg.num_partitions {
-                builder = builder.num_partitions(num_partitions);
+    pub(crate) fn ann_strategy(&self, live_vectors: usize) -> AnnStrategy {
+        match &self.kind {
+            VectorIndexKind::Auto => {
+                if live_vectors >= MIN_ROWS_FOR_IVF {
+                    AnnStrategy::Ivf {
+                        probe_buckets: DEFAULT_IVF_PROBE,
+                    }
+                } else {
+                    AnnStrategy::Exact
+                }
             }
-            if let Some(num_sub_vectors) = cfg.num_sub_vectors {
-                builder = builder.num_sub_vectors(num_sub_vectors);
-            }
-            if let Some(sample_rate) = cfg.sample_rate {
-                builder = builder.sample_rate(sample_rate);
-            }
-            if let Some(max_iterations) = cfg.max_iterations {
-                builder = builder.max_iterations(max_iterations);
-            }
-            Index::IvfPq(builder)
+            VectorIndexKind::IvfPq(cfg) => AnnStrategy::Ivf {
+                probe_buckets: cfg
+                    .num_partitions
+                    .map(|value| value as usize)
+                    .unwrap_or(DEFAULT_IVF_PROBE),
+            },
+        }
+    }
+
+    pub(crate) fn ivf_bucket_count(&self) -> usize {
+        match &self.kind {
+            VectorIndexKind::Auto => DEFAULT_IVF_BUCKETS,
+            VectorIndexKind::IvfPq(cfg) => cfg
+                .num_partitions
+                .map(|value| value as usize)
+                .unwrap_or(DEFAULT_IVF_BUCKETS),
         }
     }
 }

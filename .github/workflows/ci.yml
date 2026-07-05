@@ -17,24 +17,35 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            rust: 1.91.0
+            rust: 1.86.0
           - os: windows-latest
-            rust: 1.91.0
+            rust: 1.86.0
           - os: ubuntu-latest
             rust: stable
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout rek0n-db
+        uses: actions/checkout@v4
+        with:
+          repository: K48N/rek0n-db
+          path: rek0n-db
+
+      - name: Link rek0n-db for path dependency
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cmd //c "mklink /J ..\\rek0n-db rek0n-db"
+          else
+            ln -s "$GITHUB_WORKSPACE/rek0n-db" ../rek0n-db
+          fi
+
       - name: Install Rust ${{ matrix.rust }}
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
-
-      - uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: Swatinem/rust-cache@v2
 

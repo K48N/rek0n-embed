@@ -29,8 +29,8 @@ pub enum EmbedError {
         source: std::io::Error,
     },
 
-    #[error("LanceDB error: {0}")]
-    LanceDb(#[from] lancedb::Error),
+    #[error("database error: {0}")]
+    Database(String),
 
     #[error("Tokenizer error: {0}")]
     Tokenizer(String),
@@ -40,9 +40,6 @@ pub enum EmbedError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
-
-    #[error("Arrow error: {0}")]
-    Arrow(#[from] arrow_schema::ArrowError),
 
     #[error("Invalid metadata: {0}")]
     InvalidMetadata(String),
