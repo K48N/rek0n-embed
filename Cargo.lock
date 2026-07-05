@@ -5010,6 +5010,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "rek0n-chunk"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa80d2be6d40bb7ad8f601d3047c4d34303cbcbb2c156c53cf67314d61c30300"
 dependencies = [
  "serde",
  "thiserror 1.0.69",

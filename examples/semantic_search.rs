@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rek0n_embed::{query_semantic_context, ChunkKind, LocalEmbedder, SemanticChunk, VectorStorage};
+use rek0n_embed::{query_semantic_context, ChunkKind, IndexedChunk, LocalEmbedder, VectorStorage};
 
 fn model_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/model")
@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?);
 
     let auth_chunks = vec![
-        SemanticChunk {
+        IndexedChunk {
             kind: ChunkKind::Function,
             name: Some("authenticate".into()),
             text: "pub fn authenticate(token: &str) -> Result<User, AuthError> { verify_jwt(token) }".into(),
@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             end_line: 12,
             file_path: "src/auth.rs".into(),
         },
-        SemanticChunk {
+        IndexedChunk {
             kind: ChunkKind::Function,
             name: Some("hash_password".into()),
             text: "pub fn hash_password(password: &str) -> String { bcrypt::hash(password, DEFAULT_COST) }".into(),
@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
 
-    let models_chunks = vec![SemanticChunk {
+    let models_chunks = vec![IndexedChunk {
         kind: ChunkKind::Struct,
         name: Some("User".into()),
         text: "pub struct User { pub id: Uuid, pub email: String }".into(),

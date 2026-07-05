@@ -1,20 +1,15 @@
 use rek0n_chunk::{
     validate_file_path as chunk_validate_file_path,
-    validate_input_text_length as chunk_validate_input_text_length, ChunkError, ChunkKind,
-    IndexedChunk, MAX_FILE_PATH_LEN, MAX_INPUT_TEXT_LEN,
+    validate_input_text_length as chunk_validate_input_text_length, ChunkError,
 };
 
-pub use rek0n_chunk::ChunkKind;
-pub use MAX_FILE_PATH_LEN;
-pub use MAX_INPUT_TEXT_LEN;
+pub use rek0n_chunk::{ChunkKind, IndexedChunk, MAX_FILE_PATH_LEN, MAX_INPUT_TEXT_LEN};
 
 pub const MAX_QUERY_TEXT_LEN: usize = 8_192;
 
-pub type SemanticChunk = IndexedChunk;
-
 #[derive(Debug, Clone)]
 pub struct SearchResult {
-    pub chunk: SemanticChunk,
+    pub chunk: IndexedChunk,
     pub score: f32,
 }
 
@@ -87,6 +82,12 @@ impl EmbedError {
     }
 
     fn from_chunk_error(error: ChunkError) -> Self {
+        error.into()
+    }
+}
+
+impl From<ChunkError> for EmbedError {
+    fn from(error: ChunkError) -> Self {
         match error {
             ChunkError::EmptyText => EmbedError::InvalidChunk("text must not be empty".into()),
             ChunkError::EmptyFilePath => {
@@ -98,18 +99,18 @@ impl EmbedError {
             ChunkError::FilePathTooLong { len, max } => EmbedError::InvalidMetadata(format!(
                 "file_path length {len} exceeds limit of {max}"
             )),
-            ChunkError::FilePathControlChars => EmbedError::InvalidMetadata(
-                "file_path must not contain control characters".into(),
-            ),
+            ChunkError::FilePathControlChars => {
+                EmbedError::InvalidMetadata("file_path must not contain control characters".into())
+            }
             ChunkError::InvertedLineRange {
                 start_line,
                 end_line,
             } => EmbedError::InvalidChunk(format!(
                 "end_line ({end_line}) must be >= start_line ({start_line})"
             )),
-            ChunkError::HasSyntaxErrors => EmbedError::InvalidChunk(
-                "parser flagged chunk with syntax errors".into(),
-            ),
+            ChunkError::HasSyntaxErrors => {
+                EmbedError::InvalidChunk("parser flagged chunk with syntax errors".into())
+            }
         }
     }
 }
@@ -149,7 +150,7 @@ pub fn validate_embed_batch_size(batch_size: usize) -> Result<(), EmbedError> {
     Ok(())
 }
 
-pub fn validate_index_batch(chunks: &[SemanticChunk]) -> Result<(), EmbedError> {
+pub fn validate_index_batch(chunks: &[IndexedChunk]) -> Result<(), EmbedError> {
     if chunks.is_empty() {
         return Err(EmbedError::InvalidMetadata(
             "index batch must contain at least one chunk".to_owned(),
@@ -186,8 +187,8 @@ pub fn validate_file_path(file_path: &str) -> Result<(), EmbedError> {
 pub fn try_from_parser_chunk(
     file_path: impl Into<String>,
     parsed: &rek0n_chunk::ParsedChunk,
-) -> Result<SemanticChunk, EmbedError> {
-    SemanticChunk::from_parsed(file_path, parsed).map_err(EmbedError::from_chunk_error)
+) -> Result<IndexedChunk, EmbedError> {
+    IndexedChunk::from_parsed(file_path, parsed).map_err(EmbedError::from_chunk_error)
 }
 
 pub fn try_from_parser_parts(
@@ -198,9 +199,15 @@ pub fn try_from_parser_parts(
     start_line: usize,
     end_line: usize,
     has_error: bool,
-) -> Result<SemanticChunk, EmbedError> {
-    SemanticChunk::try_from_parser_parts(
-        file_path, parser_kind, name, text, start_line, end_line, has_error,
+) -> Result<IndexedChunk, EmbedError> {
+    IndexedChunk::try_from_parser_parts(
+        file_path,
+        parser_kind,
+        name,
+        text,
+        start_line,
+        end_line,
+        has_error,
     )
     .map_err(EmbedError::from_chunk_error)
 }
@@ -260,8 +267,8 @@ pub fn validate_table_name(name: &str) -> Result<(), EmbedError> {
 mod tests {
     use super::*;
 
-    fn sample_chunk() -> SemanticChunk {
-        SemanticChunk {
+    fn sample_chunk() -> IndexedChunk {
+        IndexedChunk {
             kind: ChunkKind::Function,
             name: Some("foo".into()),
             text: "fn foo() {}".into(),
@@ -282,7 +289,7 @@ mod tests {
 
     #[test]
     fn from_parser_parts_builds_chunk() {
-        let chunk = SemanticChunk::from_parser_parts(
+        let chunk = IndexedChunk::from_parser_parts(
             "src/lib.rs",
             "function",
             Some("main".into()),
@@ -325,14 +332,14 @@ mod tests {
     fn rejects_empty_chunk_text() {
         let mut chunk = sample_chunk();
         chunk.text = "   ".into();
-        assert!(matches!(chunk.validate(), Err(EmbedError::InvalidChunk(_))));
+        assert!(matches!(chunk.validate(), Err(ChunkError::EmptyText)));
     }
 
     #[test]
     fn rejects_empty_chunk_file_path() {
         let mut chunk = sample_chunk();
         chunk.file_path = "".into();
-        assert!(matches!(chunk.validate(), Err(EmbedError::InvalidChunk(_))));
+        assert!(matches!(chunk.validate(), Err(ChunkError::EmptyFilePath)));
     }
 
     #[test]
@@ -340,7 +347,10 @@ mod tests {
         let mut chunk = sample_chunk();
         chunk.start_line = 10;
         chunk.end_line = 2;
-        assert!(matches!(chunk.validate(), Err(EmbedError::InvalidChunk(_))));
+        assert!(matches!(
+            chunk.validate(),
+            Err(ChunkError::InvertedLineRange { .. })
+        ));
     }
 
     #[test]

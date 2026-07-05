@@ -1,8 +1,8 @@
-use rek0n_embed::{ChunkKind, SemanticChunk};
+use rek0n_embed::{ChunkKind, IndexedChunk};
 
 #[test]
 fn valid_chunk_passes_validation() {
-    let chunk = SemanticChunk {
+    let chunk = IndexedChunk {
         kind: ChunkKind::Struct,
         name: Some("User".into()),
         text: "pub struct User {}".into(),
@@ -15,7 +15,7 @@ fn valid_chunk_passes_validation() {
 
 #[test]
 fn invalid_chunks_are_rejected() {
-    let base = SemanticChunk {
+    let base = IndexedChunk {
         kind: ChunkKind::Function,
         name: None,
         text: "fn ok() {}".into(),

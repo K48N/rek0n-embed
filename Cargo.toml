@@ -32,7 +32,7 @@ serde_json = "1.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 fs4 = { version = "0.12", features = ["sync"] }
-rek0n-chunk = { path = "../rek0n-chunk", version = "0.1.0" }
+rek0n-chunk = "0.1.0"
 
 [dev-dependencies]
 tempfile = "3"

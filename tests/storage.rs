@@ -1,5 +1,5 @@
 use rek0n_embed::testing::record_batch_from_vectors;
-use rek0n_embed::{ChunkKind, EmbedError, SemanticChunk, VectorStorage, EMBEDDING_DIM};
+use rek0n_embed::{ChunkKind, EmbedError, IndexedChunk, VectorStorage, EMBEDDING_DIM};
 
 fn unit_vector(active: usize) -> Vec<f32> {
     let mut vector = vec![0.0_f32; EMBEDDING_DIM as usize];
@@ -8,8 +8,8 @@ fn unit_vector(active: usize) -> Vec<f32> {
     vector
 }
 
-fn chunk(file_path: &str, text: &str, line: usize) -> SemanticChunk {
-    SemanticChunk {
+fn chunk(file_path: &str, text: &str, line: usize) -> IndexedChunk {
+    IndexedChunk {
         kind: ChunkKind::Function,
         name: Some("demo".into()),
         text: text.into(),

@@ -4,7 +4,7 @@ Part of [rek0n](https://github.com/K48N/rek0n). Embeds parser chunks locally and
 
 ## Overview
 
-This crate takes `SemanticChunk` values (indexed chunks from [rek0n-chunk](https://github.com/K48N/rek0n-chunk)), runs all-MiniLM-L6-v2 through Candle on CPU, and writes 384-dimensional L2-normalized vectors into LanceDB. No cloud embedding APIs and no separate vector service.
+This crate takes [`IndexedChunk`](https://github.com/K48N/rek0n-chunk) values from [rek0n-chunk](https://github.com/K48N/rek0n-chunk), runs all-MiniLM-L6-v2 through Candle on CPU, and writes 384-dimensional L2-normalized vectors into LanceDB. Build them from parser [`ParsedChunk`](https://github.com/K48N/rek0n-chunk) output with `try_from_parser_chunk`. No cloud embedding APIs and no separate vector service.
 
 Local inference is slower than a hosted API. The tradeoff is privacy and control: rek0n is meant to read a whole repository without sending source code off the machine.
 
@@ -24,24 +24,31 @@ Local inference is slower than a hosted API. The tradeoff is privacy and control
 
 **Incremental index maintenance.** Full index drops were too expensive on frequent file saves. `OptimizeOptions::merge(0)` handles appends; `OptimizeOptions::retrain()` handles replace and delete churn.
 
-**Shared chunk types.** rek0n-chunk keeps parser and embed aligned on kinds, limits, and validation rules.
+**Shared chunk types.** `ParsedChunk` and `IndexedChunk` live in rek0n-chunk; parser and embed re-export them under the same names.
 
 ## Usage
 
 ```rust
 use std::sync::Arc;
-use rek0n_embed::{try_from_parser_chunk, LocalEmbedder, VectorStorage, query_semantic_context};
+use rek0n_embed::{
+    try_from_parser_chunk, IndexedChunk, LocalEmbedder, ParsedChunk, VectorStorage,
+    query_semantic_context,
+};
+use rek0n_parser::parse_file;
+
+let parsed: Vec<ParsedChunk> = parse_file(source, "rust")?;
+let chunks: Vec<IndexedChunk> = parsed
+    .iter()
+    .filter(|chunk| !chunk.has_error)
+    .map(|chunk| try_from_parser_chunk("src/lib.rs", chunk))
+    .collect::<Result<_, _>>()?;
 
 let embedder = Arc::new(LocalEmbedder::new(
     "model/model.safetensors".as_ref(),
     "model/tokenizer.json".as_ref(),
 )?);
 let storage = VectorStorage::initialize("./lancedb", "my-repo").await?;
-
-for parsed in parsed_chunks {
-    let chunk = try_from_parser_chunk("src/lib.rs", &parsed)?;
-    // batch and index...
-}
+storage.replace_file_chunks("src/lib.rs", &chunks, Arc::clone(&embedder)).await?;
 
 let hits = query_semantic_context(&storage, embedder, "how does auth work?", 10).await?;
 ```

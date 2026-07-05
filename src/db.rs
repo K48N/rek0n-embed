@@ -12,7 +12,7 @@ use crate::lock::{acquire_exclusive, acquire_shared, lock_path, LockOptions};
 use crate::model::LocalEmbedder;
 use crate::types::{
     validate_embed_batch_size, validate_file_path, validate_index_batch, validate_search_limit,
-    validate_table_name, EmbedError, SearchResult, SemanticChunk, DEFAULT_EMBED_BATCH_SIZE,
+    validate_table_name, EmbedError, IndexedChunk, SearchResult, DEFAULT_EMBED_BATCH_SIZE,
     EMBEDDING_DIM,
 };
 use lancedb::table::{OptimizeAction, OptimizeOptions};
@@ -76,7 +76,7 @@ impl VectorStorage {
     #[instrument(skip(self, chunks, embedder), fields(repo = %self.repo_name, chunks = chunks.len()))]
     pub async fn index_chunks(
         &self,
-        chunks: &[SemanticChunk],
+        chunks: &[IndexedChunk],
         embedder: Arc<LocalEmbedder>,
     ) -> Result<(), EmbedError> {
         self.index_chunks_with_batch_size(chunks, embedder, DEFAULT_EMBED_BATCH_SIZE)
@@ -86,7 +86,7 @@ impl VectorStorage {
     #[instrument(skip(self, chunks, embedder), fields(repo = %self.repo_name, chunks = chunks.len(), batch_size))]
     pub async fn index_chunks_with_batch_size(
         &self,
-        chunks: &[SemanticChunk],
+        chunks: &[IndexedChunk],
         embedder: Arc<LocalEmbedder>,
         batch_size: usize,
     ) -> Result<(), EmbedError> {
@@ -144,7 +144,7 @@ impl VectorStorage {
     pub async fn replace_file_chunks(
         &self,
         file_path: &str,
-        chunks: &[SemanticChunk],
+        chunks: &[IndexedChunk],
         embedder: Arc<LocalEmbedder>,
     ) -> Result<(), EmbedError> {
         self.replace_file_chunks_with_batch_size(
@@ -160,7 +160,7 @@ impl VectorStorage {
     pub async fn replace_file_chunks_with_batch_size(
         &self,
         file_path: &str,
-        chunks: &[SemanticChunk],
+        chunks: &[IndexedChunk],
         embedder: Arc<LocalEmbedder>,
         batch_size: usize,
     ) -> Result<(), EmbedError> {
@@ -474,7 +474,7 @@ pub fn chunk_table_schema() -> Arc<Schema> {
 }
 
 pub fn build_record_batch(
-    chunks: &[SemanticChunk],
+    chunks: &[IndexedChunk],
     embedder: &LocalEmbedder,
     batch_size: usize,
 ) -> Result<RecordBatch, EmbedError> {
@@ -494,7 +494,7 @@ pub fn build_record_batch(
 
 #[doc(hidden)]
 pub fn record_batch_from_vectors(
-    chunks: &[SemanticChunk],
+    chunks: &[IndexedChunk],
     vectors: &[Vec<f32>],
 ) -> Result<RecordBatch, EmbedError> {
     if chunks.len() != vectors.len() {
@@ -522,7 +522,7 @@ pub fn record_batch_from_vectors(
 }
 
 fn assemble_record_batch(
-    chunks: &[SemanticChunk],
+    chunks: &[IndexedChunk],
     vectors: &[Vec<f32>],
 ) -> Result<RecordBatch, EmbedError> {
     let schema = chunk_table_schema();
@@ -576,7 +576,7 @@ fn assemble_record_batch(
     .map_err(EmbedError::from)
 }
 
-fn validate_index_input(chunks: &[SemanticChunk], batch_size: usize) -> Result<(), EmbedError> {
+fn validate_index_input(chunks: &[IndexedChunk], batch_size: usize) -> Result<(), EmbedError> {
     validate_index_batch(chunks)?;
     validate_embed_batch_size(batch_size)?;
     for chunk in chunks {
@@ -585,7 +585,7 @@ fn validate_index_input(chunks: &[SemanticChunk], batch_size: usize) -> Result<(
     Ok(())
 }
 
-fn validate_chunks_for_file(file_path: &str, chunks: &[SemanticChunk]) -> Result<(), EmbedError> {
+fn validate_chunks_for_file(file_path: &str, chunks: &[IndexedChunk]) -> Result<(), EmbedError> {
     for chunk in chunks {
         if chunk.file_path != file_path {
             return Err(EmbedError::InvalidChunk(format!(
@@ -668,7 +668,7 @@ fn parse_search_batch(batch: &RecordBatch) -> Result<Vec<SearchResult>, EmbedErr
         };
 
         results.push(SearchResult {
-            chunk: SemanticChunk {
+            chunk: IndexedChunk {
                 kind: match kind_array.value(row).parse() {
                     Ok(kind) => kind,
                     Err(error) => match error {},
@@ -775,7 +775,7 @@ mod tests {
 
     #[test]
     fn validate_chunks_for_file_rejects_mismatch() {
-        let chunks = vec![SemanticChunk {
+        let chunks = vec![IndexedChunk {
             kind: ChunkKind::Function,
             name: Some("foo".into()),
             text: "fn foo() {}".into(),
@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn validate_index_input_rejects_late_invalid_chunk() {
         let chunks = vec![
-            SemanticChunk {
+            IndexedChunk {
                 kind: ChunkKind::Function,
                 name: Some("ok".into()),
                 text: "fn ok() {}".into(),
@@ -799,7 +799,7 @@ mod tests {
                 end_line: 1,
                 file_path: "src/a.rs".into(),
             },
-            SemanticChunk {
+            IndexedChunk {
                 kind: ChunkKind::Function,
                 name: Some("bad".into()),
                 text: "fn bad() {}".into(),
